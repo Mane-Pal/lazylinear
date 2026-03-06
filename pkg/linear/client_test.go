@@ -728,3 +728,155 @@ func TestIssueUpdateOperations(t *testing.T) {
 		}
 	})
 }
+
+func TestProjectGet(t *testing.T) {
+	resp := map[string]interface{}{
+		"data": map[string]interface{}{
+			"project": map[string]interface{}{
+				"id":          "proj-1",
+				"name":        "Launch v2",
+				"description": "Ship the next version",
+				"state":       "started",
+				"progress":    0.6,
+				"url":         "https://linear.app/proj/proj-1",
+			},
+		},
+	}
+
+	server := httptest.NewServer(graphQLHandler(t, "test-key", resp))
+	defer server.Close()
+
+	client := newTestClientWithServer(t, server)
+	project, err := client.Projects.Get(context.Background(), "proj-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if project.Name != "Launch v2" {
+		t.Errorf("expected 'Launch v2', got %s", project.Name)
+	}
+	if project.State != "started" {
+		t.Errorf("expected state 'started', got %s", project.State)
+	}
+}
+
+func TestContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Slow server — should be cancelled before completing
+		select {
+		case <-r.Context().Done():
+			return
+		case <-make(chan struct{}): // block forever
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClientWithServer(t, server)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := client.Teams.List(ctx)
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+}
+
+func TestMalformedJSONResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{invalid json`))
+	}))
+	defer server.Close()
+
+	client := newTestClientWithServer(t, server)
+	_, err := client.Teams.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error for malformed JSON")
+	}
+}
+
+func TestMultipleGraphQLErrors(t *testing.T) {
+	resp := map[string]interface{}{
+		"errors": []map[string]interface{}{
+			{"message": "First error"},
+			{"message": "Second error"},
+		},
+	}
+
+	server := httptest.NewServer(graphQLHandler(t, "test-key", resp))
+	defer server.Close()
+
+	client := newTestClientWithServer(t, server)
+	_, err := client.Teams.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Should report the first error
+	if err.Error() != "GraphQL error: First error" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPStatusCodes(t *testing.T) {
+	codes := []int{
+		http.StatusBadRequest,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+	}
+
+	for _, code := range codes {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer server.Close()
+
+			client := newTestClientWithServer(t, server)
+			_, err := client.Teams.List(context.Background())
+			if err == nil {
+				t.Fatalf("expected error for status %d", code)
+			}
+		})
+	}
+}
+
+func TestNilResultParameter(t *testing.T) {
+	// Passing nil result to do() should succeed without unmarshalling
+	resp := map[string]interface{}{
+		"data": map[string]interface{}{},
+	}
+
+	server := httptest.NewServer(graphQLHandler(t, "test-key", resp))
+	defer server.Close()
+
+	client := newTestClientWithServer(t, server)
+	err := client.do(context.Background(), "{ viewer { id } }", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error with nil result: %v", err)
+	}
+}
+
+func TestAuthorizationHeaderSent(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"teams": map[string]interface{}{"nodes": []interface{}{}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClientWithServer(t, server)
+	client.creds.HeaderValue = "Bearer my-oauth-token"
+
+	client.Teams.List(context.Background())
+
+	if gotAuth != "Bearer my-oauth-token" {
+		t.Errorf("expected 'Bearer my-oauth-token', got %q", gotAuth)
+	}
+}
