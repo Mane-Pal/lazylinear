@@ -6,69 +6,14 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mane-pal/lazylinear/pkg/config"
+	guicontext "github.com/mane-pal/lazylinear/pkg/gui/context"
+	"github.com/mane-pal/lazylinear/pkg/gui/popup"
+	"github.com/mane-pal/lazylinear/pkg/gui/state"
 	"github.com/mane-pal/lazylinear/pkg/gui/types"
 	"github.com/mane-pal/lazylinear/pkg/linear"
 	"github.com/mane-pal/lazylinear/pkg/linear/models"
-)
-
-// MenuType identifies what kind of menu is open
-type MenuType int
-
-const (
-	MenuNone MenuType = iota
-	MenuState
-	MenuAssign
-	MenuPriority
-	MenuConfirm
-	MenuLabels       // Multi-select labels
-	MenuCycle        // Select cycle/sprint
-	MenuRelationType // Select relation type (blocks, related, etc.)
-	MenuIssueSelect  // Select an issue (for parent/relation target)
-)
-
-// FormMode identifies what form is open
-type FormMode int
-
-const (
-	FormNone FormMode = iota
-	FormCreate
-	FormEdit
-	FormComment
-	FormEditComment
-	FormDueDate
-	FormEstimate
-)
-
-// FormField identifies which field is focused
-type FormField int
-
-const (
-	FieldTitle FormField = iota
-	FieldDescription
-	FieldTeam
-	FieldAssignee
-	FieldState
-	FieldPriority
-	FieldProject
-)
-
-// MenuItem represents an item in a menu
-type MenuItem struct {
-	ID       string
-	Label    string
-	Color    lipgloss.Color
-	Selected bool // For multi-select menus (e.g., labels)
-}
-
-// MiddlePaneView identifies what the middle pane shows
-type MiddlePaneView int
-
-const (
-	ViewIssues MiddlePaneView = iota
-	ViewProjects
 )
 
 // Gui is the main application model
@@ -78,57 +23,25 @@ type Gui struct {
 	client  *linear.Client
 	version string
 
+	// Shared state
+	State *state.AppState
+
+	// Contexts (panels)
+	SidebarCtx *guicontext.SidebarContext
+	IssuesCtx  *guicontext.IssuesContext
+	DetailCtx  *guicontext.DetailContext
+
 	// Dimensions
 	width  int
 	height int
 
-	// Data
-	teams       []*models.Team
-	issues      []*models.Issue
-	projects    []*models.Project
-	currentUser *models.User
-	teamMembers []*models.User
-	teamStates  []*models.WorkflowState
+	// Popups
+	MenuPopup   *popup.MenuPopup
+	SearchPopup *popup.SearchPopup
 
-	// Selection
-	selectedTeam    int
-	selectedIssue   int
-	selectedProject int
-
-	// Middle pane view mode
-	middlePaneView MiddlePaneView
-
-	// Sidebar filter state
-	activeFilter    string // "all", "my_issues"
-	selectedFilter  int    // Which filter option is highlighted
-	sidebarSection  int    // 0 = teams, 1 = filters, 2 = states, 3 = priority
-
-	// State filter (multi-select)
-	selectedStateIdx   int             // Navigation cursor in states section
-	activeStateFilters map[string]bool // Set of selected state IDs (multi-select)
-
-	// Priority filter state
-	activePriorityFilter int // -1 = no filter, 1-4 = priority level
-	selectedPriority     int // For navigation (0-3 maps to priority 1-4)
-
-	// Focus
-	focusedPanel types.ContextKey
-
-	// UI State
-	loading   bool
-	err       error
-	showHelp  bool
-	statusMsg string
-
-	// Menu state
-	menuType     MenuType
-	menuItems    []MenuItem
-	menuSelected int
-	menuTitle    string
-
-	// Form state
-	formMode        FormMode
-	formField       FormField
+	// Form state (to be extracted to popup/form.go later)
+	formMode        types.FormMode
+	formField       types.FormField
 	formTitle       textinput.Model
 	formDescription textarea.Model
 	formPriority    int
@@ -140,50 +53,21 @@ type Gui struct {
 
 	// Form list popup state
 	formListOpen     bool            // Is the list popup open?
-	formListField    FormField       // Which field the popup is for
+	formListField    types.FormField // Which field the popup is for
 	formListSearch   textinput.Model // Search input for filtering
 	formListSelected int             // Currently highlighted item in the list
 
-	// Confirm dialog
-	confirmTitle   string
-	confirmMessage string
-	confirmAction  func() tea.Cmd
-
-	// Label menu state (multi-select)
-	teamLabels     []*models.Label // Labels available for current team
-	selectedLabels map[string]bool // Currently selected label IDs in menu
-
-	// Cycle menu state
-	teamCycles []*models.Cycle // Cycles available for current team
-
 	// Issue picker state (for parent/relation target)
 	issuePickerCallback func(issueID string) tea.Cmd // Callback when issue is selected
-	allTeamIssues       []*models.Issue              // All issues for picker
 
 	// Due date / estimate input state
 	dueDateInput   textinput.Model // Input for due date
 	estimateInput  textinput.Model // Input for estimate
 	inputIssueID   string          // Issue ID being edited
 
-	// Detail view state
-	detailedIssue    *models.Issue // Issue with full comments
-	detailScroll     int           // Scroll position in detail view
-	selectedComment  int           // Selected comment index (-1 = none)
+	// Comment editing state
 	commentBody      textarea.Model
 	editingCommentID string // For edit comment mode
-
-	// Search state
-	searchMode     bool
-	searchInput    textinput.Model
-	searchQuery    string
-	filteredIssues []*models.Issue // nil = show all issues
-
-	// Vim command mode
-	commandMode  bool
-	commandInput textinput.Model
-
-	// Background sync
-	lastSynced time.Time
 
 	// CLI options
 	cliOpts Options
@@ -197,52 +81,164 @@ type Options struct {
 
 // New creates a new GUI instance
 func New(cfg *config.Config, client *linear.Client, version string, opts Options) *Gui {
-	return &Gui{
-		config:               cfg,
-		client:               client,
-		version:              version,
-		focusedPanel:         types.IssuesContext,
-		loading:              true,
-		activeFilter:         "all",
-		activeStateFilters:   make(map[string]bool),
-		activePriorityFilter: -1, // No priority filter by default
-		cliOpts:              opts,
+	st := &state.AppState{
+		FocusedPanel:         types.IssuesContext,
+		Loading:              true,
+		ActiveFilter:         "all",
+		ActiveStateFilters:   make(map[string]bool),
+		ActivePriorityFilter: -1, // No priority filter by default
 	}
+
+	g := &Gui{
+		config:  cfg,
+		client:  client,
+		version: version,
+		State:   st,
+		cliOpts: opts,
+	}
+
+	// Create popups
+	g.MenuPopup = popup.NewMenuPopup(st)
+	g.MenuPopup.UpdateIssueState = func(issueID, stateID string) tea.Cmd { return g.updateIssueState(issueID, stateID) }
+	g.MenuPopup.UpdateIssueAssignee = func(issueID, assigneeID string) tea.Cmd { return g.updateIssueAssignee(issueID, assigneeID) }
+	g.MenuPopup.UpdateIssuePriority = func(issueID, priorityStr string) tea.Cmd { return g.updateIssuePriority(issueID, priorityStr) }
+	g.MenuPopup.UpdateIssueCycle = func(issueID string, cycleID *string) tea.Cmd { return g.updateIssueCycle(issueID, cycleID) }
+	g.MenuPopup.UpdateIssueLabels = func(issueID string, labelIDs []string) tea.Cmd { return g.updateIssueLabels(issueID, labelIDs) }
+
+	g.SearchPopup = popup.NewSearchPopup(st)
+	g.SearchPopup.LoadIssues = func() tea.Cmd { return g.loadIssues() }
+	g.SearchPopup.LoadSelectedIssueDetails = func() tea.Cmd { return g.loadSelectedIssueDetails() }
+
+	// Create contexts
+	g.SidebarCtx = guicontext.NewSidebarContext(st)
+	g.IssuesCtx = guicontext.NewIssuesContext(st)
+	g.DetailCtx = guicontext.NewDetailContext(st)
+
+	// Wire sidebar closures
+	g.SidebarCtx.LoadIssues = func() tea.Cmd { return g.loadIssues() }
+	g.SidebarCtx.LoadTeamStates = func() tea.Cmd { return g.loadTeamStates() }
+
+	// Wire issues closures
+	g.IssuesCtx.LoadSelectedIssueDetails = func() tea.Cmd { return g.loadSelectedIssueDetails() }
+	g.IssuesCtx.OpenInBrowser = func(url string) tea.Cmd { return g.openInBrowser(url) }
+	g.IssuesCtx.CopyToClipboard = func(text string) tea.Cmd { return g.copyToClipboard(text) }
+	g.IssuesCtx.OpenStateMenu = func() tea.Cmd { return g.openStateMenu() }
+	g.IssuesCtx.OpenAssignMenu = func() tea.Cmd { return g.openAssignMenu() }
+	g.IssuesCtx.OpenPriorityMenu = func() { g.openPriorityMenu() }
+	g.IssuesCtx.OpenCreateFormCmd = func() tea.Cmd { return g.openCreateFormCmd() }
+	g.IssuesCtx.OpenEditForm = func(issueID string) {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			g.openEditForm(issue)
+		}
+	}
+	g.IssuesCtx.OpenArchiveConfirm = func(issueID string) {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			g.openArchiveConfirm(issue)
+		}
+	}
+	g.IssuesCtx.OpenLabelsMenu = func() tea.Cmd { return g.openLabelsMenu() }
+	g.IssuesCtx.OpenCycleMenu = func() tea.Cmd { return g.openCycleMenu() }
+
+	// Wire detail closures
+	g.DetailCtx.OpenInBrowser = func(url string) tea.Cmd { return g.openInBrowser(url) }
+	g.DetailCtx.CopyToClipboard = func(text string) tea.Cmd { return g.copyToClipboard(text) }
+	g.DetailCtx.OpenStateMenu = func() tea.Cmd { return g.openStateMenu() }
+	g.DetailCtx.OpenAssignMenu = func() tea.Cmd { return g.openAssignMenu() }
+	g.DetailCtx.OpenPriorityMenu = func() { g.openPriorityMenu() }
+	g.DetailCtx.OpenLabelsMenu = func() tea.Cmd { return g.openLabelsMenu() }
+	g.DetailCtx.OpenCycleMenu = func() tea.Cmd { return g.openCycleMenu() }
+	g.DetailCtx.OpenCommentForm = func() { g.openCommentForm() }
+	g.DetailCtx.OpenEditForm = func(issueID string) {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			g.openEditForm(issue)
+		}
+	}
+	g.DetailCtx.OpenEditCommentForm = func(commentID string) {
+		if comment := g.findCommentByID(commentID); comment != nil {
+			g.openEditCommentForm(comment)
+		}
+	}
+	g.DetailCtx.OpenDeleteCommentConfirm = func(commentID string) {
+		if comment := g.findCommentByID(commentID); comment != nil {
+			g.openDeleteCommentConfirm(comment)
+		}
+	}
+	g.DetailCtx.OpenArchiveConfirm = func(issueID string) {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			g.openArchiveConfirm(issue)
+		}
+	}
+	g.DetailCtx.OpenDueDateInput = func(issueID string) {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			g.openDueDateInput(issue)
+		}
+	}
+	g.DetailCtx.OpenEstimateInput = func(issueID string) {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			g.openEstimateInput(issue)
+		}
+	}
+	g.DetailCtx.OpenParentPicker = func(issueID string) tea.Cmd {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			return g.openParentPicker(issue)
+		}
+		return nil
+	}
+	g.DetailCtx.OpenRelationTypeMenu = func() { g.openRelationTypeMenu() }
+	g.DetailCtx.OpenCreateSubIssueFormCmd = func(issueID string) tea.Cmd {
+		if issue := g.findIssueByID(issueID); issue != nil {
+			return g.openCreateSubIssueFormCmd(issue)
+		}
+		return nil
+	}
+	g.DetailCtx.LoadSelectedIssueDetails = func() tea.Cmd { return g.loadSelectedIssueDetails() }
+
+	return g
 }
 
-// Messages
-type teamsLoadedMsg struct{ teams []*models.Team }
-type issuesLoadedMsg struct{ issues []*models.Issue }
-type projectsLoadedMsg struct{ projects []*models.Project }
-type userLoadedMsg struct{ user *models.User }
-type teamStatesLoadedMsg struct{ states []*models.WorkflowState }
-type teamMembersLoadedMsg struct{ members []*models.User }
-type issueUpdatedMsg struct{ issue *models.Issue }
-type detailedIssueLoadedMsg struct{ issue *models.Issue }
-type commentCreatedMsg struct{ comment *models.Comment }
-type commentDeletedMsg struct{ issueID string }
-type errMsg struct{ err error }
-type statusMsg string
-type clearStatusMsg struct{}
-type backgroundSyncMsg struct{}
+// findIssueByID looks up an issue by ID from the current issues or detailed issue.
+func (g *Gui) findIssueByID(id string) *models.Issue {
+	if g.State.DetailedIssue != nil && g.State.DetailedIssue.ID == id {
+		return g.State.DetailedIssue
+	}
+	for _, issue := range g.State.Issues {
+		if issue.ID == id {
+			return issue
+		}
+	}
+	return g.State.GetSelectedIssue()
+}
+
+// findCommentByID looks up a comment by ID from the detailed issue.
+func (g *Gui) findCommentByID(id string) *models.Comment {
+	if g.State.DetailedIssue == nil {
+		return nil
+	}
+	for _, comment := range g.State.DetailedIssue.GetComments() {
+		if comment.ID == id {
+			return comment
+		}
+	}
+	return nil
+}
 
 // clearStatusAfter returns a command that clears the status after a delay
 func clearStatusAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg {
-		return clearStatusMsg{}
+		return types.ClearStatusMsg{}
 	})
 }
 
 // backgroundSyncTick returns a command that triggers background sync
 func backgroundSyncTick() tea.Cmd {
 	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
-		return backgroundSyncMsg{}
+		return types.BackgroundSyncMsg{}
 	})
 }
 
 // Init initializes the model
 func (g *Gui) Init() tea.Cmd {
-	g.lastSynced = time.Now()
+	g.State.LastSynced = time.Now()
 	return tea.Batch(
 		g.loadTeams(),
 		g.loadIssues(),

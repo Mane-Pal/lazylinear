@@ -7,9 +7,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	guicontext "github.com/mane-pal/lazylinear/pkg/gui/context"
 	"github.com/mane-pal/lazylinear/pkg/gui/styles"
 	"github.com/mane-pal/lazylinear/pkg/gui/types"
-	"github.com/mane-pal/lazylinear/pkg/linear/models"
 )
 
 // Update handles messages
@@ -17,8 +17,8 @@ func (g *Gui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Help overlay intercepts all keys
-		if g.showHelp {
-			g.showHelp = false
+		if g.State.ShowHelp {
+			g.State.ShowHelp = false
 			return g, nil
 		}
 		return g.handleKey(msg)
@@ -28,243 +28,243 @@ func (g *Gui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		g.height = msg.Height
 		return g, nil
 
-	case teamsLoadedMsg:
-		g.teams = msg.teams
+	case types.TeamsLoadedMsg:
+		g.State.Teams = msg.Teams
 		// Pre-select team by name if provided via CLI
 		if g.cliOpts.TeamName != "" {
-			for i, team := range g.teams {
+			for i, team := range g.State.Teams {
 				if strings.EqualFold(team.Name, g.cliOpts.TeamName) || strings.EqualFold(team.Key, g.cliOpts.TeamName) {
-					g.selectedTeam = i
+					g.State.SelectedTeam = i
 					break
 				}
 			}
 		}
 		// Load states for the selected team
-		if len(g.teams) > 0 {
+		if len(g.State.Teams) > 0 {
 			return g, g.loadTeamStates()
 		}
 		return g, nil
 
-	case issuesLoadedMsg:
-		g.issues = msg.issues
-		g.loading = false
+	case types.IssuesLoadedMsg:
+		g.State.Issues = msg.Issues
+		g.State.Loading = false
 		// Reset selection if out of bounds
-		if g.selectedIssue >= len(g.issues) {
-			g.selectedIssue = max(0, len(g.issues)-1)
+		if g.State.SelectedIssue >= len(g.State.Issues) {
+			g.State.SelectedIssue = max(0, len(g.State.Issues)-1)
 		}
 		return g, nil
 
-	case projectsLoadedMsg:
-		g.projects = msg.projects
-		g.loading = false
+	case types.ProjectsLoadedMsg:
+		g.State.Projects = msg.Projects
+		g.State.Loading = false
 		// Reset selection if out of bounds
-		if g.selectedProject >= len(g.projects) {
-			g.selectedProject = max(0, len(g.projects)-1)
+		if g.State.SelectedProject >= len(g.State.Projects) {
+			g.State.SelectedProject = max(0, len(g.State.Projects)-1)
 		}
 		return g, nil
 
-	case userLoadedMsg:
-		g.currentUser = msg.user
+	case types.UserLoadedMsg:
+		g.State.CurrentUser = msg.User
 		return g, nil
 
-	case errMsg:
-		g.err = msg.err
-		g.loading = false
+	case types.ErrMsg:
+		g.State.Err = msg.Err
+		g.State.Loading = false
 		return g, nil
 
-	case statusMsg:
-		g.statusMsg = string(msg)
+	case types.StatusMsg:
+		g.State.StatusMsg = string(msg)
 		return g, clearStatusAfter(3 * time.Second)
 
-	case clearStatusMsg:
-		g.statusMsg = ""
+	case types.ClearStatusMsg:
+		g.State.StatusMsg = ""
 		return g, nil
 
-	case teamStatesLoadedMsg:
-		g.teamStates = msg.states
+	case types.TeamStatesLoadedMsg:
+		g.State.TeamStates = msg.States
 		// Auto-select active states (backlog, unstarted, started) for initial load
-		g.activeStateFilters = make(map[string]bool)
-		for _, state := range g.teamStates {
+		g.State.ActiveStateFilters = make(map[string]bool)
+		for _, state := range g.State.TeamStates {
 			if state.Type == "backlog" || state.Type == "unstarted" || state.Type == "started" {
-				g.activeStateFilters[state.ID] = true
+				g.State.ActiveStateFilters[state.ID] = true
 			}
 		}
 
 		// If CLI requested create issue mode, open the form now
 		if g.cliOpts.CreateIssue {
 			g.cliOpts.CreateIssue = false // Only trigger once
-			g.loading = false
+			g.State.Loading = false
 			return g, g.openCreateFormCmd()
 		}
 
 		// Reload issues with the active state filter
-		g.loading = true
+		g.State.Loading = true
 		return g, g.loadIssues()
 
-	case teamMembersLoadedMsg:
-		g.teamMembers = msg.members
+	case types.TeamMembersLoadedMsg:
+		g.State.TeamMembers = msg.Members
 		return g, nil
 
-	case issueUpdatedMsg:
+	case types.IssueUpdatedMsg:
 		// Update the issue in our list
-		for i, issue := range g.issues {
-			if issue.ID == msg.issue.ID {
-				g.issues[i] = msg.issue
+		for i, issue := range g.State.Issues {
+			if issue.ID == msg.Issue.ID {
+				g.State.Issues[i] = msg.Issue
 				break
 			}
 		}
 		return g, nil
 
-	case detailedIssueLoadedMsg:
-		g.detailedIssue = msg.issue
-		g.selectedComment = -1
-		g.detailScroll = 0
+	case types.DetailedIssueLoadedMsg:
+		g.State.DetailedIssue = msg.Issue
+		g.State.SelectedComment = -1
+		g.State.DetailScroll = 0
 		return g, nil
 
-	case commentCreatedMsg:
+	case types.CommentCreatedMsg:
 		// Reload detailed issue to refresh comments
-		if g.detailedIssue != nil {
+		if g.State.DetailedIssue != nil {
 			g.closeForm()
-			return g, g.loadDetailedIssue(g.detailedIssue.ID)
+			return g, g.loadDetailedIssue(g.State.DetailedIssue.ID)
 		}
 		return g, nil
 
-	case commentDeletedMsg:
-		g.selectedComment = -1
-		if msg.issueID != "" {
-			return g, g.loadDetailedIssue(msg.issueID)
+	case types.CommentDeletedMsg:
+		g.State.SelectedComment = -1
+		if msg.IssueID != "" {
+			return g, g.loadDetailedIssue(msg.IssueID)
 		}
 		return g, nil
 
-	case backgroundSyncMsg:
+	case types.BackgroundSyncMsg:
 		// Background sync - reload issues silently
-		g.lastSynced = time.Now()
+		g.State.LastSynced = time.Now()
 		return g, tea.Batch(g.loadIssues(), backgroundSyncTick())
 
-	case stateMenuMsg:
+	case types.StateMenuMsg:
 		// Convert to menu items
-		items := make([]MenuItem, len(msg.states))
-		for i, state := range msg.states {
-			items[i] = MenuItem{
+		items := make([]types.MenuItem, len(msg.States))
+		for i, state := range msg.States {
+			items[i] = types.MenuItem{
 				ID:    state.ID,
 				Label: state.Name,
 				Color: styles.StateColor(state.Type),
 			}
 		}
 
-		g.menuType = MenuState
-		g.menuTitle = "Change State"
-		g.menuItems = items
-		g.menuSelected = 0
+		g.MenuPopup.MenuType = types.MenuState
+		g.MenuPopup.MenuTitle = "Change State"
+		g.MenuPopup.MenuItems = items
+		g.MenuPopup.MenuSelected = 0
 
 		// Pre-select current state
-		if msg.issue.State != nil {
+		if msg.Issue.State != nil {
 			for i, item := range items {
-				if item.ID == msg.issue.State.ID {
-					g.menuSelected = i
+				if item.ID == msg.Issue.State.ID {
+					g.MenuPopup.MenuSelected = i
 					break
 				}
 			}
 		}
 		return g, nil
 
-	case reloadIssuesMsg:
-		g.loading = true
+	case types.ReloadIssuesMsg:
+		g.State.Loading = true
 		return g, tea.Batch(
 			g.loadIssues(),
-			func() tea.Msg { return statusMsg("Updated") },
+			func() tea.Msg { return types.StatusMsg("Updated") },
 		)
 
-	case assignMenuMsg:
+	case types.AssignMenuMsg:
 		// Convert to menu items, with "Unassigned" option first
-		items := make([]MenuItem, len(msg.members)+1)
-		items[0] = MenuItem{
+		items := make([]types.MenuItem, len(msg.Members)+1)
+		items[0] = types.MenuItem{
 			ID:    "",
 			Label: "Unassigned",
 			Color: styles.Secondary,
 		}
-		for i, member := range msg.members {
-			items[i+1] = MenuItem{
+		for i, member := range msg.Members {
+			items[i+1] = types.MenuItem{
 				ID:    member.ID,
 				Label: member.DisplayName,
 				Color: styles.Primary,
 			}
 		}
 
-		g.menuType = MenuAssign
-		g.menuTitle = "Assign User"
-		g.menuItems = items
-		g.menuSelected = 0
+		g.MenuPopup.MenuType = types.MenuAssign
+		g.MenuPopup.MenuTitle = "Assign User"
+		g.MenuPopup.MenuItems = items
+		g.MenuPopup.MenuSelected = 0
 
 		// Pre-select current assignee
-		if msg.issue.Assignee != nil {
+		if msg.Issue.Assignee != nil {
 			for i, item := range items {
-				if item.ID == msg.issue.Assignee.ID {
-					g.menuSelected = i
+				if item.ID == msg.Issue.Assignee.ID {
+					g.MenuPopup.MenuSelected = i
 					break
 				}
 			}
 		}
 		return g, nil
 
-	case labelsMenuMsg:
+	case types.LabelsMenuMsg:
 		// Store labels for rendering
-		g.teamLabels = msg.labels
+		g.State.TeamLabels = msg.Labels
 
 		// Build selected labels map from current issue labels
-		g.selectedLabels = make(map[string]bool)
-		if msg.issue.Labels != nil {
-			for _, label := range msg.issue.Labels.Nodes {
-				g.selectedLabels[label.ID] = true
+		g.State.SelectedLabels = make(map[string]bool)
+		if msg.Issue.Labels != nil {
+			for _, label := range msg.Issue.Labels.Nodes {
+				g.State.SelectedLabels[label.ID] = true
 			}
 		}
 
 		// Convert to menu items with checkmarks for selected
-		items := make([]MenuItem, len(msg.labels))
-		for i, label := range msg.labels {
-			items[i] = MenuItem{
+		items := make([]types.MenuItem, len(msg.Labels))
+		for i, label := range msg.Labels {
+			items[i] = types.MenuItem{
 				ID:       label.ID,
 				Label:    label.Name,
 				Color:    lipgloss.Color(label.Color),
-				Selected: g.selectedLabels[label.ID],
+				Selected: g.State.SelectedLabels[label.ID],
 			}
 		}
 
-		g.menuType = MenuLabels
-		g.menuTitle = "Select Labels (Space to toggle)"
-		g.menuItems = items
-		g.menuSelected = 0
+		g.MenuPopup.MenuType = types.MenuLabels
+		g.MenuPopup.MenuTitle = "Select Labels (Space to toggle)"
+		g.MenuPopup.MenuItems = items
+		g.MenuPopup.MenuSelected = 0
 		return g, nil
 
-	case cyclesMenuMsg:
+	case types.CyclesMenuMsg:
 		// Store cycles for reference
-		g.teamCycles = msg.cycles
+		g.State.TeamCycles = msg.Cycles
 
 		// Convert to menu items with "No cycle" option first
-		items := make([]MenuItem, len(msg.cycles)+1)
-		items[0] = MenuItem{
+		items := make([]types.MenuItem, len(msg.Cycles)+1)
+		items[0] = types.MenuItem{
 			ID:    "",
 			Label: "No Cycle",
 			Color: styles.Secondary,
 		}
-		for i, cycle := range msg.cycles {
-			items[i+1] = MenuItem{
+		for i, cycle := range msg.Cycles {
+			items[i+1] = types.MenuItem{
 				ID:    cycle.ID,
 				Label: cycle.Name,
 				Color: styles.Primary,
 			}
 		}
 
-		g.menuType = MenuCycle
-		g.menuTitle = "Assign to Cycle"
-		g.menuItems = items
-		g.menuSelected = 0
+		g.MenuPopup.MenuType = types.MenuCycle
+		g.MenuPopup.MenuTitle = "Assign to Cycle"
+		g.MenuPopup.MenuItems = items
+		g.MenuPopup.MenuSelected = 0
 
 		// Pre-select current cycle
-		if msg.issue.Cycle != nil {
+		if msg.Issue.Cycle != nil {
 			for i, item := range items {
-				if item.ID == msg.issue.Cycle.ID {
-					g.menuSelected = i
+				if item.ID == msg.Issue.Cycle.ID {
+					g.MenuPopup.MenuSelected = i
 					break
 				}
 			}
@@ -279,23 +279,26 @@ func (g *Gui) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	// Form mode intercepts all keys
-	if g.formMode != FormNone {
+	if g.formMode != types.FormNone {
 		return g.handleFormKey(msg)
 	}
 
 	// Search mode intercepts keys
-	if g.searchMode {
-		return g.handleSearchKey(msg)
+	if g.SearchPopup.SearchMode {
+		cmd := g.SearchPopup.HandleSearchKey(msg)
+		return g, cmd
 	}
 
 	// Command mode intercepts keys
-	if g.commandMode {
-		return g.handleCommandKey(msg)
+	if g.SearchPopup.CommandMode {
+		cmd := g.SearchPopup.HandleCommandKey(msg)
+		return g, cmd
 	}
 
 	// Menu intercepts keys when open
-	if g.menuType != MenuNone {
-		return g.handleMenuKey(key)
+	if g.MenuPopup.IsOpen() {
+		cmd, _ := g.MenuPopup.HandleKey(key)
+		return g, cmd
 	}
 
 	// Global keys
@@ -304,658 +307,103 @@ func (g *Gui) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return g, tea.Quit
 
 	case "?":
-		g.showHelp = !g.showHelp
+		g.State.ShowHelp = !g.State.ShowHelp
 		return g, nil
 
 	case "/":
-		g.openSearch()
+		g.SearchPopup.OpenSearch()
 		return g, nil
 
 	case ":":
-		g.openCommandMode()
+		g.SearchPopup.OpenCommandMode()
 		return g, nil
 
 	case "tab":
-		// Tab cycles within sidebar, or returns to sidebar from other panels
-		if g.focusedPanel == types.TeamsContext {
+		if g.State.FocusedPanel == types.TeamsContext {
 			g.cycleSidebarSection(1)
 		} else {
-			g.focusedPanel = types.TeamsContext
+			g.State.FocusedPanel = types.TeamsContext
 		}
 		return g, nil
 
 	case "shift+tab":
-		// Shift+Tab cycles backwards within sidebar, or returns to sidebar
-		if g.focusedPanel == types.TeamsContext {
+		if g.State.FocusedPanel == types.TeamsContext {
 			g.cycleSidebarSection(-1)
 		} else {
-			g.focusedPanel = types.TeamsContext
+			g.State.FocusedPanel = types.TeamsContext
 		}
 		return g, nil
 
 	case "r":
-		g.loading = true
-		g.lastSynced = time.Now()
-		if g.middlePaneView == ViewProjects {
+		g.State.Loading = true
+		g.State.LastSynced = time.Now()
+		if g.State.MiddlePaneView == types.ViewProjects {
 			return g, g.loadProjects()
 		}
 		return g, g.loadIssues()
 
 	case "P":
-		// Toggle between Issues and Projects view
-		if g.middlePaneView == ViewIssues {
-			g.middlePaneView = ViewProjects
-			g.loading = true
+		if g.State.MiddlePaneView == types.ViewIssues {
+			g.State.MiddlePaneView = types.ViewProjects
+			g.State.Loading = true
 			return g, g.loadProjects()
 		} else {
-			g.middlePaneView = ViewIssues
-			g.loading = true
+			g.State.MiddlePaneView = types.ViewIssues
+			g.State.Loading = true
 			return g, g.loadIssues()
 		}
 
 	case "m":
-		// Toggle My Issues filter and reload from API
-		if g.activeFilter == "my_issues" {
-			g.activeFilter = "all"
+		if g.State.ActiveFilter == "my_issues" {
+			g.State.ActiveFilter = "all"
 		} else {
-			g.activeFilter = "my_issues"
+			g.State.ActiveFilter = "my_issues"
 		}
-		g.selectedIssue = 0
-		g.selectedFilter = g.getFilterIndex(g.activeFilter)
-		g.loading = true
+		g.State.SelectedIssue = 0
+		g.State.SelectedFilter = guicontext.GetFilterIndex(g.State.ActiveFilter)
+		g.State.Loading = true
 		return g, g.loadIssues()
 
 	case "x":
-		// Clear all filters and reload with active states only
-		g.activeFilter = "all"
-		g.activeStateFilters = make(map[string]bool)
-		// Re-select active states (backlog, unstarted, started)
-		for _, state := range g.teamStates {
-			if state.Type == "backlog" || state.Type == "unstarted" || state.Type == "started" {
-				g.activeStateFilters[state.ID] = true
+		g.State.ActiveFilter = "all"
+		g.State.ActiveStateFilters = make(map[string]bool)
+		for _, st := range g.State.TeamStates {
+			if st.Type == "backlog" || st.Type == "unstarted" || st.Type == "started" {
+				g.State.ActiveStateFilters[st.ID] = true
 			}
 		}
-		g.activePriorityFilter = -1
-		g.searchQuery = ""
-		g.filteredIssues = nil
-		g.selectedIssue = 0
-		g.selectedFilter = 0
-		g.selectedStateIdx = 0
-		g.selectedPriority = 0
-		g.loading = true
+		g.State.ActivePriorityFilter = -1
+		g.State.SearchQuery = ""
+		g.State.FilteredIssues = nil
+		g.State.SelectedIssue = 0
+		g.State.SelectedFilter = 0
+		g.State.SelectedStateIdx = 0
+		g.State.SelectedPriority = 0
+		g.State.Loading = true
 		return g, g.loadIssues()
 
 	case "esc":
-		// Clear search filter
-		if g.searchQuery != "" {
-			g.searchQuery = ""
-			g.filteredIssues = nil
-			g.selectedIssue = 0
+		if g.State.SearchQuery != "" {
+			g.State.SearchQuery = ""
+			g.State.FilteredIssues = nil
+			g.State.SelectedIssue = 0
 			return g, nil
 		}
 	}
 
-	// Panel-specific keys
-	switch g.focusedPanel {
+	// Panel-specific keys - delegated to contexts
+	switch g.State.FocusedPanel {
 	case types.TeamsContext:
-		return g.handleTeamsKey(key)
+		return g, g.SidebarCtx.HandleKey(msg)
 	case types.IssuesContext:
-		return g.handleIssuesKey(key)
+		return g, g.IssuesCtx.HandleKey(msg)
 	case types.DetailContext:
-		return g.handleDetailKey(key)
+		return g, g.DetailCtx.HandleKey(msg)
 	}
 
 	return g, nil
-}
-
-func (g *Gui) handleMenuKey(key string) (tea.Model, tea.Cmd) {
-	// Handle confirm dialog
-	if g.menuType == MenuConfirm {
-		switch key {
-		case "y", "Y", "enter":
-			cmd := g.confirmAction()
-			g.closeMenu()
-			return g, cmd
-		case "n", "N", "esc", "q":
-			g.closeMenu()
-		}
-		return g, nil
-	}
-
-	// Handle label multi-select menu
-	if g.menuType == MenuLabels {
-		switch key {
-		case "j", "down":
-			if g.menuSelected < len(g.menuItems)-1 {
-				g.menuSelected++
-			}
-		case "k", "up":
-			if g.menuSelected > 0 {
-				g.menuSelected--
-			}
-		case " ": // Space toggles selection
-			if g.menuSelected < len(g.menuItems) {
-				item := &g.menuItems[g.menuSelected]
-				item.Selected = !item.Selected
-				g.selectedLabels[item.ID] = item.Selected
-				if !item.Selected {
-					delete(g.selectedLabels, item.ID)
-				}
-			}
-		case "enter": // Confirm selection
-			issue := g.getSelectedIssue()
-			if issue != nil {
-				labelIDs := make([]string, 0, len(g.selectedLabels))
-				for id := range g.selectedLabels {
-					labelIDs = append(labelIDs, id)
-				}
-				cmd := g.updateIssueLabels(issue.ID, labelIDs)
-				g.closeMenu()
-				return g, cmd
-			}
-			g.closeMenu()
-		case "esc", "q":
-			g.closeMenu()
-		}
-		return g, nil
-	}
-
-	// Handle regular menus
-	switch key {
-	case "j", "down":
-		if g.menuSelected < len(g.menuItems)-1 {
-			g.menuSelected++
-		}
-	case "k", "up":
-		if g.menuSelected > 0 {
-			g.menuSelected--
-		}
-	case "enter":
-		return g.selectMenuItem()
-	case "esc", "q":
-		g.closeMenu()
-	}
-	return g, nil
-}
-
-func (g *Gui) closeMenu() {
-	g.menuType = MenuNone
-	g.menuItems = nil
-	g.menuSelected = 0
-	g.menuTitle = ""
-}
-
-func (g *Gui) selectMenuItem() (tea.Model, tea.Cmd) {
-	if g.menuSelected >= len(g.menuItems) {
-		g.closeMenu()
-		return g, nil
-	}
-
-	item := g.menuItems[g.menuSelected]
-	issue := g.getSelectedIssue()
-	if issue == nil {
-		g.closeMenu()
-		return g, nil
-	}
-
-	var cmd tea.Cmd
-
-	switch g.menuType {
-	case MenuState:
-		cmd = g.updateIssueState(issue.ID, item.ID)
-	case MenuAssign:
-		cmd = g.updateIssueAssignee(issue.ID, item.ID)
-	case MenuPriority:
-		cmd = g.updateIssuePriority(issue.ID, item.ID)
-	case MenuCycle:
-		var cycleID *string
-		if item.ID != "" {
-			cycleID = &item.ID
-		}
-		cmd = g.updateIssueCycle(issue.ID, cycleID)
-	case MenuRelationType:
-		// Store the relation type and open issue picker
-		g.closeMenu()
-		// TODO: Open issue picker for selecting the related issue
-		return g, func() tea.Msg { return statusMsg("Relation type selected: " + item.ID) }
-	}
-
-	g.closeMenu()
-	return g, cmd
-}
-
-func (g *Gui) handleTeamsKey(key string) (tea.Model, tea.Cmd) {
-	// Sections: 0=teams, 1=filters, 2=states, 3=priority
-	switch key {
-	case "j", "down":
-		switch g.sidebarSection {
-		case 0: // Teams section
-			if g.selectedTeam < len(g.teams)-1 {
-				g.selectedTeam++
-			} else {
-				g.sidebarSection = 1
-				g.selectedFilter = 0
-			}
-		case 1: // Filters section
-			if g.selectedFilter < len(filterOptions)-1 {
-				g.selectedFilter++
-			} else {
-				g.sidebarSection = 2
-				g.selectedStateIdx = 0
-			}
-		case 2: // States section
-			if g.selectedStateIdx < len(g.teamStates)-1 {
-				g.selectedStateIdx++
-			} else {
-				g.sidebarSection = 3
-				g.selectedPriority = 0
-			}
-		case 3: // Priority section
-			if g.selectedPriority < 3 {
-				g.selectedPriority++
-			}
-		}
-	case "k", "up":
-		switch g.sidebarSection {
-		case 0: // Teams section
-			if g.selectedTeam > 0 {
-				g.selectedTeam--
-			}
-		case 1: // Filters section
-			if g.selectedFilter > 0 {
-				g.selectedFilter--
-			} else {
-				g.sidebarSection = 0
-			}
-		case 2: // States section
-			if g.selectedStateIdx > 0 {
-				g.selectedStateIdx--
-			} else {
-				g.sidebarSection = 1
-				g.selectedFilter = len(filterOptions) - 1
-			}
-		case 3: // Priority section
-			if g.selectedPriority > 0 {
-				g.selectedPriority--
-			} else {
-				g.sidebarSection = 2
-				if len(g.teamStates) > 0 {
-					g.selectedStateIdx = len(g.teamStates) - 1
-				}
-			}
-		}
-	case " ": // Space toggles filters/states/priority and reloads from API
-		switch g.sidebarSection {
-		case 1: // Toggle filter
-			g.activeFilter = filterOptions[g.selectedFilter].key
-			g.selectedIssue = 0
-			g.loading = true
-			return g, g.loadIssues()
-		case 2: // Toggle state filter (multi-select)
-			if g.selectedStateIdx < len(g.teamStates) {
-				stateID := g.teamStates[g.selectedStateIdx].ID
-				if g.activeStateFilters[stateID] {
-					delete(g.activeStateFilters, stateID)
-				} else {
-					g.activeStateFilters[stateID] = true
-				}
-				g.selectedIssue = 0
-				g.loading = true
-				return g, g.loadIssues()
-			}
-		case 3: // Toggle priority filter
-			priority := g.selectedPriority + 1
-			if g.activePriorityFilter == priority {
-				g.activePriorityFilter = -1
-			} else {
-				g.activePriorityFilter = priority
-			}
-			g.selectedIssue = 0
-			g.loading = true
-			return g, g.loadIssues()
-		}
-	case "enter", "l":
-		// Enter selects team and moves to Issues panel
-		if g.sidebarSection == 0 {
-			g.selectedIssue = 0
-			g.activeStateFilters = make(map[string]bool) // Clear state filters
-			g.loading = true
-			g.focusedPanel = types.IssuesContext
-			return g, tea.Batch(g.loadIssues(), g.loadTeamStates())
-		}
-		// For other sections, just move to Issues panel
-		g.focusedPanel = types.IssuesContext
-	case "m":
-		// Quick toggle for My Issues and reload
-		if g.activeFilter == "my_issues" {
-			g.activeFilter = "all"
-		} else {
-			g.activeFilter = "my_issues"
-		}
-		g.selectedIssue = 0
-		g.selectedFilter = g.getFilterIndex(g.activeFilter)
-		g.loading = true
-		return g, g.loadIssues()
-	case "x":
-		// Clear all filters and reload with active states
-		g.activeFilter = "all"
-		g.activeStateFilters = make(map[string]bool)
-		for _, state := range g.teamStates {
-			if state.Type == "backlog" || state.Type == "unstarted" || state.Type == "started" {
-				g.activeStateFilters[state.ID] = true
-			}
-		}
-		g.activePriorityFilter = -1
-		g.selectedIssue = 0
-		g.selectedFilter = 0
-		g.selectedStateIdx = 0
-		g.selectedPriority = 0
-		g.loading = true
-		return g, g.loadIssues()
-	}
-	return g, nil
-}
-
-func (g *Gui) getFilterIndex(filter string) int {
-	for i, f := range filterOptions {
-		if f.key == filter {
-			return i
-		}
-	}
-	return 0
-}
-
-func (g *Gui) handleIssuesKey(key string) (tea.Model, tea.Cmd) {
-	// Handle projects view navigation
-	if g.middlePaneView == ViewProjects {
-		switch key {
-		case "j", "down":
-			if g.selectedProject < len(g.projects)-1 {
-				g.selectedProject++
-			}
-		case "k", "up":
-			if g.selectedProject > 0 {
-				g.selectedProject--
-			}
-		case "g":
-			g.selectedProject = 0
-		case "G":
-			g.selectedProject = max(0, len(g.projects)-1)
-		case "enter", "l":
-			// Could show project detail in future
-			// For now, show project issues?
-			return g, nil
-		case "h":
-			g.focusedPanel = types.TeamsContext
-		case "o":
-			// Open project in browser
-			if g.selectedProject < len(g.projects) {
-				return g, g.openInBrowser(g.projects[g.selectedProject].URL)
-			}
-		}
-		return g, nil
-	}
-
-	// Handle issues view navigation
-	switch key {
-	case "j", "down":
-		issues := g.getDisplayIssues()
-		if g.selectedIssue < len(issues)-1 {
-			g.selectedIssue++
-			return g, g.loadSelectedIssueDetails()
-		}
-	case "k", "up":
-		if g.selectedIssue > 0 {
-			g.selectedIssue--
-			return g, g.loadSelectedIssueDetails()
-		}
-	case "g":
-		g.selectedIssue = 0
-		return g, g.loadSelectedIssueDetails()
-	case "G":
-		issues := g.getDisplayIssues()
-		g.selectedIssue = max(0, len(issues)-1)
-		return g, g.loadSelectedIssueDetails()
-	case "enter", "l":
-		g.focusedPanel = types.DetailContext
-		return g, g.loadSelectedIssueDetails()
-	case "h":
-		g.focusedPanel = types.TeamsContext
-
-	// Quick actions
-	case "o":
-		// Open in browser
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.openInBrowser(issue.URL)
-		}
-	case "y":
-		// Yank URL
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.copyToClipboard(issue.URL)
-		}
-	case "Y":
-		// Yank identifier
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.copyToClipboard(issue.Identifier)
-		}
-
-	// Menus
-	case "s":
-		// Change state
-		return g, g.openStateMenu()
-	case "a":
-		// Assign user
-		return g, g.openAssignMenu()
-	case "p":
-		// Set priority
-		g.openPriorityMenu()
-
-	// Create/Edit/Archive
-	case "n":
-		// New issue
-		return g, g.openCreateFormCmd()
-	case "e":
-		// Edit issue (also used for estimate in detail panel)
-		if issue := g.getSelectedIssue(); issue != nil {
-			g.openEditForm(issue)
-		}
-	case "d":
-		// Archive issue
-		if issue := g.getSelectedIssue(); issue != nil {
-			g.openArchiveConfirm(issue)
-		}
-
-	// New features
-	case "L":
-		// Open labels menu (multi-select)
-		return g, g.openLabelsMenu()
-	case "c":
-		// Assign to cycle
-		return g, g.openCycleMenu()
-	}
-	return g, nil
-}
-
-func (g *Gui) handleDetailKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "h", "esc":
-		g.focusedPanel = types.IssuesContext
-		g.selectedComment = -1
-	case "j", "down":
-		// Navigate comments
-		if g.detailedIssue != nil {
-			comments := g.detailedIssue.GetComments()
-			if len(comments) > 0 {
-				if g.selectedComment < len(comments)-1 {
-					g.selectedComment++
-				}
-			}
-		}
-	case "k", "up":
-		// Navigate comments
-		if g.selectedComment > -1 {
-			g.selectedComment--
-		}
-
-	// Quick actions (same as issues panel)
-	case "o":
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.openInBrowser(issue.URL)
-		}
-	case "y":
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.copyToClipboard(issue.URL)
-		}
-	case "Y":
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.copyToClipboard(issue.Identifier)
-		}
-
-	// Menus
-	case "s":
-		return g, g.openStateMenu()
-	case "a":
-		return g, g.openAssignMenu()
-	case "p":
-		g.openPriorityMenu()
-
-	// Labels (multi-select)
-	case "L":
-		return g, g.openLabelsMenu()
-
-	// Cycle
-	case "c":
-		// In detail, c is used for both comment and cycle
-		// If no detailed issue, add comment, otherwise assign cycle
-		if g.selectedComment == -1 && g.detailedIssue != nil {
-			// Check if this could be for add comment (if not showing cycle info)
-			// For now, let's use Ctrl+C for cycle and c for comment
-			g.openCommentForm()
-		}
-
-	// Due date
-	case "D":
-		if issue := g.getSelectedIssue(); issue != nil {
-			g.openDueDateInput(issue)
-		}
-
-	// Estimate
-	case "E":
-		if issue := g.getSelectedIssue(); issue != nil {
-			g.openEstimateInput(issue)
-		}
-
-	// Parent issue
-	case "P":
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.openParentPicker(issue)
-		}
-
-	// Relations
-	case "R":
-		g.openRelationTypeMenu()
-
-	// Cycle (alternative key)
-	case "C":
-		return g, g.openCycleMenu()
-
-	// Edit - context dependent
-	case "e":
-		if g.selectedComment >= 0 && g.detailedIssue != nil {
-			// Edit selected comment
-			comments := g.detailedIssue.GetComments()
-			if g.selectedComment < len(comments) {
-				comment := comments[g.selectedComment]
-				// Only allow editing own comments
-				if g.currentUser != nil && comment.User != nil && comment.User.ID == g.currentUser.ID {
-					g.openEditCommentForm(comment)
-				} else {
-					return g, func() tea.Msg { return statusMsg("Can only edit your own comments") }
-				}
-			}
-		} else if issue := g.getSelectedIssue(); issue != nil {
-			// Edit issue
-			g.openEditForm(issue)
-		}
-
-	// Delete - context dependent
-	case "d":
-		if g.selectedComment >= 0 && g.detailedIssue != nil {
-			// Delete selected comment
-			comments := g.detailedIssue.GetComments()
-			if g.selectedComment < len(comments) {
-				comment := comments[g.selectedComment]
-				// Only allow deleting own comments
-				if g.currentUser != nil && comment.User != nil && comment.User.ID == g.currentUser.ID {
-					g.openDeleteCommentConfirm(comment)
-				} else {
-					return g, func() tea.Msg { return statusMsg("Can only delete your own comments") }
-				}
-			}
-		} else if issue := g.getSelectedIssue(); issue != nil {
-			// Archive issue
-			g.openArchiveConfirm(issue)
-		}
-
-	// Sub-issue creation
-	case "N":
-		if issue := g.getSelectedIssue(); issue != nil {
-			return g, g.openCreateSubIssueFormCmd(issue)
-		}
-	}
-	return g, nil
-}
-
-func (g *Gui) cycleFocus(direction int) {
-	panels := []types.ContextKey{
-		types.TeamsContext,
-		types.IssuesContext,
-		types.DetailContext,
-	}
-
-	current := 0
-	for i, p := range panels {
-		if p == g.focusedPanel {
-			current = i
-			break
-		}
-	}
-
-	next := (current + direction + len(panels)) % len(panels)
-	g.focusedPanel = panels[next]
 }
 
 func (g *Gui) cycleSidebarSection(direction int) {
-	// Sections: 0=teams, 1=filters, 2=states, 3=priority
-	numSections := 4
-	g.sidebarSection = (g.sidebarSection + direction + numSections) % numSections
-
-	// Reset selection index for new section
-	switch g.sidebarSection {
-	case 0:
-		// Keep selectedTeam as is
-	case 1:
-		g.selectedFilter = 0
-	case 2:
-		g.selectedStateIdx = 0
-	case 3:
-		g.selectedPriority = 0
-	}
-}
-
-func (g *Gui) getDisplayIssues() []*models.Issue {
-	// State/priority/assignee filtering is now done server-side via API
-	// This function only handles search filtering (client-side for interactive search)
-	if g.filteredIssues != nil {
-		return g.filteredIssues
-	}
-	return g.issues
-}
-
-func (g *Gui) getSelectedIssue() *models.Issue {
-	issues := g.getDisplayIssues()
-	if g.selectedIssue < len(issues) {
-		return issues[g.selectedIssue]
-	}
-	return nil
+	guicontext.CycleSidebarSection(g.State, direction)
 }

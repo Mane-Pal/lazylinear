@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/mane-pal/lazylinear/pkg/gui/types"
 	"github.com/mane-pal/lazylinear/pkg/linear/models"
 )
 
@@ -12,9 +13,9 @@ func (g *Gui) loadTeams() tea.Cmd {
 	return func() tea.Msg {
 		teams, err := g.client.Teams.List(context.Background())
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return teamsLoadedMsg{teams}
+		return types.TeamsLoadedMsg{Teams: teams}
 	}
 }
 
@@ -22,34 +23,30 @@ func (g *Gui) loadIssues() tea.Cmd {
 	return func() tea.Msg {
 		filter := models.IssueFilter{}
 
-		// Team filter
-		if g.selectedTeam < len(g.teams) && g.teams[g.selectedTeam] != nil {
-			filter.TeamID = g.teams[g.selectedTeam].ID
+		if g.State.SelectedTeam < len(g.State.Teams) && g.State.Teams[g.State.SelectedTeam] != nil {
+			filter.TeamID = g.State.Teams[g.State.SelectedTeam].ID
 		}
 
-		// Assignee filter ("My Issues")
-		if g.activeFilter == "my_issues" && g.currentUser != nil {
-			filter.AssigneeID = g.currentUser.ID
+		if g.State.ActiveFilter == "my_issues" && g.State.CurrentUser != nil {
+			filter.AssigneeID = g.State.CurrentUser.ID
 		}
 
-		// State filter (multi-select)
-		if len(g.activeStateFilters) > 0 {
-			filter.StateIDs = make([]string, 0, len(g.activeStateFilters))
-			for stateID := range g.activeStateFilters {
+		if len(g.State.ActiveStateFilters) > 0 {
+			filter.StateIDs = make([]string, 0, len(g.State.ActiveStateFilters))
+			for stateID := range g.State.ActiveStateFilters {
 				filter.StateIDs = append(filter.StateIDs, stateID)
 			}
 		}
 
-		// Priority filter
-		if g.activePriorityFilter > 0 {
-			filter.Priority = &g.activePriorityFilter
+		if g.State.ActivePriorityFilter > 0 {
+			filter.Priority = &g.State.ActivePriorityFilter
 		}
 
 		issues, err := g.client.Issues.List(context.Background(), filter)
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return issuesLoadedMsg{issues}
+		return types.IssuesLoadedMsg{Issues: issues}
 	}
 }
 
@@ -57,16 +54,15 @@ func (g *Gui) loadProjects() tea.Cmd {
 	return func() tea.Msg {
 		filter := models.ProjectFilter{}
 
-		// Team filter
-		if g.selectedTeam < len(g.teams) && g.teams[g.selectedTeam] != nil {
-			filter.TeamID = g.teams[g.selectedTeam].ID
+		if g.State.SelectedTeam < len(g.State.Teams) && g.State.Teams[g.State.SelectedTeam] != nil {
+			filter.TeamID = g.State.Teams[g.State.SelectedTeam].ID
 		}
 
 		projects, err := g.client.Projects.List(context.Background(), filter)
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return projectsLoadedMsg{projects}
+		return types.ProjectsLoadedMsg{Projects: projects}
 	}
 }
 
@@ -74,53 +70,53 @@ func (g *Gui) loadUser() tea.Cmd {
 	return func() tea.Msg {
 		user, err := g.client.Users.Viewer(context.Background())
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return userLoadedMsg{user}
+		return types.UserLoadedMsg{User: user}
 	}
 }
 
 func (g *Gui) loadTeamStates() tea.Cmd {
 	return func() tea.Msg {
-		if g.selectedTeam >= len(g.teams) {
+		if g.State.SelectedTeam >= len(g.State.Teams) {
 			return nil
 		}
-		team, err := g.client.Teams.GetWithStates(context.Background(), g.teams[g.selectedTeam].ID)
+		team, err := g.client.Teams.GetWithStates(context.Background(), g.State.Teams[g.State.SelectedTeam].ID)
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return teamStatesLoadedMsg{states: team.States}
+		return types.TeamStatesLoadedMsg{States: team.States}
 	}
 }
 
 func (g *Gui) loadTeamMembers() tea.Cmd {
 	return func() tea.Msg {
 		teamIdx := g.formTeam
-		if teamIdx < 0 || teamIdx >= len(g.teams) {
-			teamIdx = g.selectedTeam
+		if teamIdx < 0 || teamIdx >= len(g.State.Teams) {
+			teamIdx = g.State.SelectedTeam
 		}
-		if teamIdx >= len(g.teams) {
+		if teamIdx >= len(g.State.Teams) {
 			return nil
 		}
-		members, err := g.client.Users.TeamMembers(context.Background(), g.teams[teamIdx].ID)
+		members, err := g.client.Users.TeamMembers(context.Background(), g.State.Teams[teamIdx].ID)
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return teamMembersLoadedMsg{members: members}
+		return types.TeamMembersLoadedMsg{Members: members}
 	}
 }
 
 func (g *Gui) loadFormTeamStates() tea.Cmd {
 	return func() tea.Msg {
 		teamIdx := g.formTeam
-		if teamIdx < 0 || teamIdx >= len(g.teams) {
+		if teamIdx < 0 || teamIdx >= len(g.State.Teams) {
 			return nil
 		}
-		team, err := g.client.Teams.GetWithStates(context.Background(), g.teams[teamIdx].ID)
+		team, err := g.client.Teams.GetWithStates(context.Background(), g.State.Teams[teamIdx].ID)
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return teamStatesLoadedMsg{states: team.States}
+		return types.TeamStatesLoadedMsg{States: team.States}
 	}
 }
 
@@ -128,16 +124,15 @@ func (g *Gui) loadDetailedIssue(issueID string) tea.Cmd {
 	return func() tea.Msg {
 		issue, err := g.client.Issues.Get(context.Background(), issueID)
 		if err != nil {
-			return errMsg{err}
+			return types.ErrMsg{Err: err}
 		}
-		return detailedIssueLoadedMsg{issue}
+		return types.DetailedIssueLoadedMsg{Issue: issue}
 	}
 }
 
 func (g *Gui) loadSelectedIssueDetails() tea.Cmd {
-	if issue := g.getSelectedIssue(); issue != nil {
-		// Clear previous detailed issue when selection changes
-		g.detailedIssue = nil
+	if issue := g.State.GetSelectedIssue(); issue != nil {
+		g.State.DetailedIssue = nil
 		return g.loadDetailedIssue(issue.ID)
 	}
 	return nil
