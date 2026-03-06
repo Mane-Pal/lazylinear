@@ -1,0 +1,35 @@
+# Binary
+lazylinear
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Not ready yet
+screenshots/
+docs/
+BUILD_PLAN.md
+PLANNING.md
+ROADMAP.md
